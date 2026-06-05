@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Braces, Clock, Code, Copy, Palette, RotateCcw, Ruler, Timer } from 'lucide-react'
+import { Braces, Clock, Code, Copy, Palette, RotateCcw, Ruler, SwatchBook, Timer } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-type ToolId = 'px-rem' | 'seconds-ms' | 'hex-rgb' | 'timestamp' | 'json'
+type ToolId = 'px-rem' | 'seconds-ms' | 'hex-rgb' | 'palette' | 'timestamp' | 'json'
 type Accent = 'aqua' | 'honey' | 'leaf' | 'pink' | 'violet'
 
 type Tool = {
@@ -23,6 +23,7 @@ const tools: Tool[] = [
   { id: 'px-rem', label: 'px / rem', short: 'CSS size', icon: Ruler, accent: 'aqua' },
   { id: 'seconds-ms', label: '秒 / ms', short: 'duration', icon: Timer, accent: 'honey' },
   { id: 'hex-rgb', label: 'HEX / RGB', short: 'color', icon: Palette, accent: 'pink' },
+  { id: 'palette', label: 'パレット', short: 'contrast', icon: SwatchBook, accent: 'aqua' },
   { id: 'timestamp', label: 'Timestamp', short: 'Unix time', icon: Clock, accent: 'leaf' },
   { id: 'json', label: 'JSON整形', short: 'format', icon: Braces, accent: 'violet' },
 ]
@@ -113,6 +114,7 @@ export default function App() {
         {activeTool === 'px-rem' && <PxRemTool />}
         {activeTool === 'seconds-ms' && <SecondsMsTool />}
         {activeTool === 'hex-rgb' && <HexRgbTool />}
+        {activeTool === 'palette' && <PaletteTool />}
         {activeTool === 'timestamp' && <TimestampTool />}
         {activeTool === 'json' && <JsonTool />}
       </main>
@@ -381,6 +383,89 @@ function toHexPart(value: number) {
   return value.toString(16).padStart(2, '0').toUpperCase()
 }
 
+type Rgb = {
+  r: number
+  g: number
+  b: number
+}
+
+function hexToRgb(value: string): Rgb | null {
+  const normalized = normalizeHex(value)
+  if (!normalized) {
+    return null
+  }
+
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  }
+}
+
+function rgbToHex({ r, g, b }: Rgb) {
+  return `#${toHexPart(r)}${toHexPart(g)}${toHexPart(b)}`
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  return {
+    r: Math.round(from.r + (to.r - from.r) * amount),
+    g: Math.round(from.g + (to.g - from.g) * amount),
+    b: Math.round(from.b + (to.b - from.b) * amount),
+  }
+}
+
+function relativeLuminance({ r, g, b }: Rgb) {
+  const convert = (channel: number) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }
+
+  return 0.2126 * convert(r) + 0.7152 * convert(g) + 0.0722 * convert(b)
+}
+
+function contrastRatio(background: Rgb, foreground: Rgb) {
+  const bg = relativeLuminance(background)
+  const fg = relativeLuminance(foreground)
+  const lighter = Math.max(bg, fg)
+  const darker = Math.min(bg, fg)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+const paletteSteps = [
+  { label: '50', target: { r: 255, g: 255, b: 255 }, amount: 0.92 },
+  { label: '100', target: { r: 255, g: 255, b: 255 }, amount: 0.84 },
+  { label: '200', target: { r: 255, g: 255, b: 255 }, amount: 0.68 },
+  { label: '300', target: { r: 255, g: 255, b: 255 }, amount: 0.48 },
+  { label: '400', target: { r: 255, g: 255, b: 255 }, amount: 0.24 },
+  { label: '500', target: null, amount: 0 },
+  { label: '600', target: { r: 0, g: 0, b: 0 }, amount: 0.14 },
+  { label: '700', target: { r: 0, g: 0, b: 0 }, amount: 0.3 },
+  { label: '800', target: { r: 0, g: 0, b: 0 }, amount: 0.46 },
+  { label: '900', target: { r: 0, g: 0, b: 0 }, amount: 0.62 },
+]
+
+function createPalette(base: Rgb) {
+  const white = { r: 255, g: 255, b: 255 }
+  const black = { r: 0, g: 0, b: 0 }
+
+  return paletteSteps.map((step) => {
+    const rgb = step.target ? mixRgb(base, step.target, step.amount) : base
+    const hex = rgbToHex(rgb)
+    const whiteContrast = contrastRatio(rgb, white)
+    const blackContrast = contrastRatio(rgb, black)
+    const recommended = blackContrast >= whiteContrast ? '黒文字' : '白文字'
+
+    return {
+      ...step,
+      rgb,
+      hex,
+      whiteContrast,
+      blackContrast,
+      recommended,
+    }
+  })
+}
+
 function HexRgbTool() {
   const [mode, setMode] = useState<ColorMode>('hex-to-rgb')
   const [hex, setHex] = useState('#8EE8EE')
@@ -449,6 +534,117 @@ function HexRgbTool() {
         {result.valid && <span className="color-swatch" style={{ background: result.primary.startsWith('#') ? result.primary : hex }} />}
       </ResultPanel>
     </div>
+  )
+}
+
+function PaletteTool() {
+  const [baseColor, setBaseColor] = useState('#8EEEFF')
+  const baseRgb = useMemo(() => hexToRgb(baseColor), [baseColor])
+  const palette = useMemo(() => (baseRgb ? createPalette(baseRgb) : []), [baseRgb])
+
+  return (
+    <div className="palette-tool">
+      <div className="form-stack">
+        <div className="field-grid">
+          <Field label="ベースカラー">
+            <input onChange={(event) => setBaseColor(event.target.value)} spellCheck={false} type="text" value={baseColor} />
+          </Field>
+          <Field label="色見本">
+            <span className="base-color-preview" style={{ background: baseRgb ? rgbToHex(baseRgb) : '#fff1f5' }} />
+          </Field>
+        </div>
+        <ResetButton onClick={() => setBaseColor('#8EEEFF')} />
+      </div>
+
+      {!baseRgb && (
+        <ResultPanel details={['#RGB または #RRGGBB を入力してね']} primary="Invalid HEX" title="パレット" />
+      )}
+
+      {baseRgb && (
+        <section className="palette-grid" aria-label="生成されたカラーパレット">
+          {palette.map((color) => (
+            <PaletteCard
+              blackContrast={color.blackContrast}
+              hex={color.hex}
+              key={color.label}
+              label={color.label}
+              recommended={color.recommended}
+              whiteContrast={color.whiteContrast}
+            />
+          ))}
+        </section>
+      )}
+    </div>
+  )
+}
+
+function PaletteCard({
+  label,
+  hex,
+  whiteContrast,
+  blackContrast,
+  recommended,
+}: {
+  label: string
+  hex: string
+  whiteContrast: number
+  blackContrast: number
+  recommended: string
+}) {
+  const [copied, setCopied] = useState<'hex' | 'css' | null>(null)
+  const cssVariable = `--color-primary-${label}: ${hex};`
+
+  const handleCopy = async (type: 'hex' | 'css') => {
+    await copyText(type === 'hex' ? hex : cssVariable)
+    setCopied(type)
+    window.setTimeout(() => setCopied(null), 1200)
+  }
+
+  return (
+    <article className="palette-card">
+      <div className="palette-swatch" style={{ background: hex }}>
+        <span>{label}</span>
+      </div>
+      <div className="palette-card-body">
+        <div className="palette-card-head">
+          <div>
+            <p>{label}</p>
+            <strong>{hex}</strong>
+          </div>
+          <button className="mini-copy" onClick={() => handleCopy('hex')} type="button">
+            {copied === 'hex' ? 'Copied' : 'HEX'}
+          </button>
+        </div>
+
+        <div className="text-preview-grid">
+          <div className="text-preview" style={{ background: hex, color: '#fff' }}>
+            白文字
+          </div>
+          <div className="text-preview" style={{ background: hex, color: '#000' }}>
+            黒文字
+          </div>
+        </div>
+
+        <dl className="contrast-list">
+          <div>
+            <dt>白文字</dt>
+            <dd>{formatNumber(whiteContrast, 2)}</dd>
+          </div>
+          <div>
+            <dt>黒文字</dt>
+            <dd>{formatNumber(blackContrast, 2)}</dd>
+          </div>
+          <div>
+            <dt>おすすめ</dt>
+            <dd>{recommended}</dd>
+          </div>
+        </dl>
+
+        <button className="css-copy" onClick={() => handleCopy('css')} type="button">
+          {copied === 'css' ? 'CSS変数コピー済み' : 'CSS変数をコピー'}
+        </button>
+      </div>
+    </article>
   )
 }
 

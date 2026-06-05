@@ -25,6 +25,7 @@ npm run build
 - px ↔ rem
 - 秒 ↔ ms
 - HEX ↔ RGB
+- カラーパレット作成
 - Unix timestamp ↔ 日時
 - JSON整形
 
